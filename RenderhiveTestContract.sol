@@ -51,9 +51,12 @@ contract RenderhiveTestContract is ReentrancyGuard {
       // check if the username is already in use
       require(!usernames[username], "Username already in use");
 
+      // next userId
+      nextUserId = nextUserId.add(1);
+
       // create a new user
       User memory user = User({
-          userId: nextUserId.add(1),
+          userId: nextUserId,
           username: username,
           registrationTime: block.timestamp,
           isRegistered: true
@@ -76,6 +79,10 @@ contract RenderhiveTestContract is ReentrancyGuard {
       // check if the user is registered
       require(users[msg.sender].isRegistered, "User not registered");
 
+      // temporarily store the userId and username to emit an event after deletion
+      uint userId = users[msg.sender].userId;
+      string memory username = users[msg.sender].username;
+
       // delete the user from the mapping
       delete users[msg.sender];
 
@@ -83,7 +90,7 @@ contract RenderhiveTestContract is ReentrancyGuard {
       delete usernames[users[msg.sender].username];
 
       // emit event
-      emit DeletedUser(users[msg.sender].userId, users[msg.sender].username, msg.sender, block.timestamp);
+      emit DeletedUser(userId, username, msg.sender, block.timestamp);
 
   }
 
