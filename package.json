@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@hashgraph/smart-contracts": "github:hashgraph/hedera-smart-contracts",
+    "@openzeppelin/contracts": "^5.0.0"
+  }
+}
