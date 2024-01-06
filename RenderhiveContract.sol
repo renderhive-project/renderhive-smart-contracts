@@ -55,7 +55,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
     // node events
     event AddedNode(address indexed operator, address indexed nodeAccount, uint256 registrationTime);
-    event DeletedNode(address indexed operator, address indexed nodeAccount, uint256 deletionTime);
+    event RemovedNode(address indexed operator, address indexed nodeAccount, uint256 deletionTime);
 
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -63,12 +63,18 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // these functions enable the registration and magegement of operators on the Renderhive network
     struct Operator {
-        uint256 balance;
-        uint256 registrationTime;
+
+        // operator information
+        uint256 balance;                   // the amount of HBAR deposited by the operator in the smart contract
+        address operatorTopic;             // the address of the operator topic on Hedera
+        uint256 registrationTime;          // the time when the operator registered on the smart contract
 
         // operator statistics
         uint256 acceptedRenderInvoices;    // number of invoices paid by this operator
         uint256 declinedRenderInvoices;    // number of invoices this operator declined to pay
+
+        // status flags
+        bool isArchived;                    // flag to indicate if the operator is active
 
     }
 
@@ -83,7 +89,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     {
 
         // check if the calling account is already registered as operator
-        require(operators[msg.sender].registrationTime == 0, "Operator with this address is already registered");
+        require(operators[msg.sender].registrationTime == 0, "Operator with this address is already registered or was registered before");
 
         // create a new operator
         operators[msg.sender] = Operator({
@@ -95,7 +101,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
     }
 
-    // function to delete the calling operator account
+    // function to unregister the calling operator account
+    // NOTE: Decided against deleting the operator data to make historical data queryable
     function unregisterOperator() 
         public 
         nonReentrant 
@@ -104,24 +111,36 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
         // check if the calling account is registered as operator
         require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
 
-        // TODO: Check all nodes owned by the operator and delete them. (Or should we keep them for data integrity?)
+        // get the operator data
+        Operator storage operatorData = operators[msg.sender];
 
-        // transfer any remaining balance back to the operator
-        if (operators[msg.sender].balance > 0) {
-            payable(msg.sender).transfer(operators[msg.sender].balance);
+        // TODO: Need to make sure that their is no active task for this operator (e.g., pending render jobs, pending payments, etc.)
+        // check if operator has no pending render jobs
+        require(operatorRenderJobs[msg.sender].length == 0, "Operator has active render jobs");
+
+        // loop through all the operator's nodes and remove them from the operator account
+        address[] storage thisOperatorNodes = operatorNodes[msg.sender];
+        for (uint256 i = 0; i < thisOperatorNodes.length; i++) {
+            removeNode(thisOperatorNodes[i]);
         }
 
-        // TODO: Check, if it would make more sense to keep the record and just mark the operator as inactive
-        // delete the account from the mapping
-        delete operators[msg.sender];
+        // transfer any remaining balance back to the operator account
+        if (operatorData.balance > 0) {
+            payable(msg.sender).transfer(operatorData.balance);
+            operatorData.balance = 0;
+        }
+
+        // we keep the operator record in order to keep track of historical data, but we mark it as archived
+        operatorData.isArchived = true;
 
         // emit an event about the deletion
         emit UnregisteredUser(msg.sender, block.timestamp);
 
     }
 
-    // function to check if the given addres is a registered operator
+    // function to check if the given address is a registered operator
     function isOperator(address _operatorAccount) 
         public 
         view 
@@ -144,8 +163,10 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         nonReentrant 
         whenNotPaused 
     {
-        // check if the calling account is registered as operator
+
+        // check if the calling account is registered as operator and not archived
         require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
 
         // make sure a deposit was provided
         require(msg.value > 0, "The amount of HBAR deposited must not be zero");
@@ -161,8 +182,10 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         nonReentrant 
         whenNotPaused 
     {
-        // check if the calling account is registered as operator
+        
+        // check if the calling account is registered as operator and not archived
         require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
 
         // check if the operator balance is sufficient
         require(operatorData.balance >= _amount, "Insufficient balance");
@@ -230,18 +253,22 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // TODO: Think about shifting the nodeGuarentee field to the Operator struct
     //         - might be easier to manage, in case jobs need to be paid
-    //         - is it actually fair/required to have a guarantee per node or should it rather be per operator?
 
     // these functions enable the registration and management of nodes owned by operators on the Renderhive network
     struct Node {
+
+        // node information
         address operatorAccount;
         uint256 nodeGuarantee;
         uint256 registrationTime;
-        bool isActive;
 
         // node statistics
         uint256 acceptedRenderInvoices;    // number of successfully processed render jobs of this node
         uint256 declinedRenderInvoices;    // number of render jobs NOT successfully processed by this node
+
+        // node status flags
+        bool isActive;                     // flag to indicate if the node is active (i.e., has the required node guarantee)
+        bool isArchived;                   // flag to indicate if the node was removed (i.e., the node was deactivated and no more changes are allowed)
 
     }
 
@@ -278,7 +305,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
             operatorAccount: msg.sender,
             nodeGuarantee: msg.value,
             registrationTime: block.timestamp,
-            isActive: true
+            isActive: true,
+            isArchived: false
         });
 
         // add the node account to operatorNodes mapping
@@ -292,9 +320,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
     }
 
-    // function to delete a node from an operator account
-    // TODO: Can we delete nodes or would the loss of data from the smart contract be a problem?
-    function deleteNode(address _nodeAccount) 
+    // function to remove a node from an operator account
+    function removeNode(address _nodeAccount) 
         public 
         nonReentrant 
         whenNotPaused 
@@ -314,19 +341,20 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
             index++;
         }
 
-        // remove the node from the operatorNodes array
-        thisOperatorNodes[index] = thisOperatorNodes[operatorNodes[msg.sender].length - 1];
-        thisOperatorNodes.pop();
-
         // move the node guarantee to the operator balance
         operators[msg.sender].balance = operators[msg.sender].balance + Nodes[_nodeAccount].nodeGuarantee;
         Nodes[_nodeAccount].nodeGuarantee = 0;
 
-        // delete the node from the Nodes mapping
-        delete Nodes[_nodeAccount];
+        // mark the node as archived
+        Nodes[_nodeAccount].isActive = false;
+        Nodes[_nodeAccount].isArchived = true;
+
+        // remove the node from the operatorNodes array
+        thisOperatorNodes[index] = thisOperatorNodes[operatorNodes[msg.sender].length - 1];
+        thisOperatorNodes.pop();
 
         // emit an event about the deleted node
-        emit DeletedNode(msg.sender, _nodeAccount, block.timestamp);
+        emit RemovedNode(msg.sender, _nodeAccount, block.timestamp);
 
     }
 
@@ -427,22 +455,30 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // these functions enable the management of render jobs, which are submitted by users and executed by nodes
     struct RenderJob {
+
+        // render job information
         string jobCID;          // the CID of the render job request document
         address owner;          // the account address of the operator account owning this render job
         address jobTopic;       // the address of the render job topic on Hedera
         uint256 jobWork;        // the (estimated) work in BBh required to render this job
         uint256 jobCost;        // the (estimated maximum) cost of the render job
+
+        // render job status flags
         bool isArchived;        // flag to indicate if the render job is archived (i.e., no more changes are expected)
     }
     struct RenderInvoice {
+
+        // render invoice information
         string invoiceCID;                  // the CID of the render job invoice submitted by a render node
         address nodeAccount;                // the account address of the render node that submitted the invoice
         uint256 jobWork;                    // the amount of BBh invoiced by the render node
         uint256 jobCost;                    // the amount of HBAR invoiced by the render node
 
+        // render invoice status flags
         InvoiceState state;                 // the state of the render job invoice
         InvoiceDeclineReason declineReason; // the reason why the render job invoice was declined
 
+        // render invoice links
         string prevInvoiceCID;              // the CID of the previously declined render job invoice
         string nextInvoiceCID;              // the CID of the render job invoice submitted after this invoice was declined
     }
@@ -503,50 +539,9 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         operators[msg.sender].balance = operators[msg.sender].balance + msg.value;
     }
 
-    // function to archive a render job
-    // TODO: Think about if the "archiving" of a render job is a reasonable concept.
-    //       One issue is that the render job owner could archive before all invoices are submitted.
-    // function archiveRenderJob(string memory _jobCID) 
-    //     public 
-    //     nonReentrant
-    //     whenNotPaused
-    // {
-
-    //     // check if the given render job exists and is owned by the calling account (also checks if this account is registered as operator)
-    //     require(isRenderJobOwner(msg.sender, _jobCID), "Render invoice does not belong to operator's render job");
-
-    //     // check if the render job is NOT archived already
-    //     require(RenderJobs[_jobCID].isArchived == false, "Render job is already archived");
-
-    //     // check if all render invoices for this render job are either accepted or declined
-    //     bool hasPendingInvoices = false;
-    //     for (uint256 i = 0; i < renderJobInvoices[_jobCID].length; i++) {
-    //         if (renderJobInvoices[_jobCID][i].state == InvoiceState.REQUESTED) {
-    //             hasPendingInvoices = true;
-    //             break;
-    //         }
-    //     }
-    //     require(!hasPendingInvoices, "Cannot archive render jobs with pending invoices");
-
-    //     // archive this render job
-    //     RenderJobs[_jobCID].isArchived = true;
-
-    //     // remove the render job from the operator's render jobs array
-    //     string[] storage thisOperatorRenderJobs = operatorRenderJobs[msg.sender];
-    //     for (uint256 i = 0; i < thisOperatorRenderJobs.length; i++) {
-    //         if (keccak256(abi.encodePacked(thisOperatorRenderJobs[i])) == keccak256(abi.encodePacked(_jobCID))) {
-    //             thisOperatorRenderJobs[i] = thisOperatorRenderJobs[thisOperatorRenderJobs.length - 1];
-    //             thisOperatorRenderJobs.pop();
-    //             break;
-    //         }
-    //     }
-
-    // }
-
-
     // TODO: How do deal with malicious nodes that send render invoices although they never took part in the render job?
-    //       - this could be done on the job owner side: The node that submitted the job automatically rejects all invoices
-    //         which where not part of the networks job distribution consensus
+    //       - this could be done on the job owner side: 
+    //         The node software automatically rejects all invoices which where not part of the networks job distribution consensus. 
     // function to add an invoice to a render job, which also represents a payment request
     function addRenderInvoice(string memory _jobCID, string memory _invoiceCID, uint256 _invoicedWork, uint256 _invoicedCost)
         public 
@@ -836,7 +831,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     }
 
     // (private) helper function to check if a previous invoice was declined because of an invalid render result
-    // NOTE: This functions does not check if the given invoice CID is valid! This must happen before calling it in another function!
+    // NOTE: This functions does not check if the given invoice CID is valid! This MUST happen before calling it in another function!
     function _isRerenderedJob(string memory _invoiceCID) 
         private 
         view 
@@ -867,7 +862,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
 
     // (private) helper function to check if a previous invoice was declined because of an invalid render result
-    // NOTE: This functions does not check if the given invoice CID is valid! This must happen before calling it in another function!
+    // NOTE: This functions does not check if the given invoice CID is valid! This MUST happen before calling it in another function!
     function _getRerenderedInvoice(string memory _invoiceCID) 
         private 
         view 
@@ -897,7 +892,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     }
 
     // (private) helper function to execute the payment of a render invoice
-    // NOTE: This is a private function, because it should only be called by the acceptRenderInvoices function
+    // NOTE: This is a private function, because it should only be called by the acceptRenderInvoices function. All sanity checks MUST be done before calling this function!
     function _executePayment(string memory _invoiceCID, InvoiceState memory _invoiceState) 
         private 
     {
@@ -927,6 +922,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // TODO: Such an option adds a level of security, but also one of centralized control over the contract. 
     //       Should we give up this option in favor of absolute decentralization?
+    //       - if yes, then remove the owner variable and all functions that use it
+
     // functions to enable the pausing and unpausing of the smart contract (in case of a contract redeployment, a bug, or an exploit)
     function pause() 
         public 
@@ -945,7 +942,6 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     function getBalance() 
         public 
         view 
-        onlyOwner 
         
         returns (uint256) 
     {
