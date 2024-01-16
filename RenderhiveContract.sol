@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // 2023 © Christian Stolze
 
-pragma solidity >= 0.9.0;
+pragma solidity >= 0.8.9;
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "./node_modules/@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+// import "./node_modules/@openzeppelin/contracts/access/Ownable.sol";
+import "./node_modules/@openzeppelin/contracts/utils/Pausable.sol";
 
-import "@hashgraph/smart-contracts/exchange-rate-precomile/SelfFunding.sol";
+import "./node_modules/@hashgraph/smart-contracts/contracts/exchange-rate-precompile/SelfFunding.sol";
 
-contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
+contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
-    constructor() {
-    }
+// contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
+
+//     constructor(address initialOwner) Ownable(initialOwner) {
+//     }
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     //  CONSTANTS & ENUMERATIONS
@@ -50,12 +52,12 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     //  EVENTS
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     // operator events
-    event RegisteredUser(address indexed operatorAccount, uint256 registrationTime);
-    event UnregisteredUser(address indexed operatorAccount, uint256 deletionTime);
+    event RegisteredUser(address indexed operatorTopic, address operatorAccount, uint256 registrationTime);
+    event UnregisteredUser(address indexed operatorTopic, address operatorAccount, uint256 deletionTime);
 
     // node events
-    event AddedNode(address indexed operator, address indexed nodeAccount, uint256 registrationTime);
-    event RemovedNode(address indexed operator, address indexed nodeAccount, uint256 deletionTime);
+    event AddedNode(address indexed operatorTopic, address indexed nodeTopic, address operator, address nodeAccount, string topicID, uint256 registrationTime);
+    event RemovedNode(address indexed operatorTopic, address indexed nodeTopic, address operator, address nodeAccount, string topicID, uint256 deletionTime);
 
 
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -65,8 +67,9 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     struct Operator {
 
         // operator information
+        // bytes64 publicKey;                 // the public key of the operator (secp256k1 ECDSA)
+        string operatorTopic;              // the address of the operator topic on Hedera
         uint256 balance;                   // the amount of HBAR deposited by the operator in the smart contract
-        address operatorTopic;             // the address of the operator topic on Hedera
         uint256 registrationTime;          // the time when the operator registered on the smart contract
 
         // operator statistics
@@ -82,22 +85,28 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     mapping(address => Operator) private operators;
 
     // function to register a new operator account
-    function registerOperator() 
+    function registerOperator(string memory _operatorTopic) 
         public 
         nonReentrant 
         whenNotPaused 
     {
 
         // check if the calling account is already registered as operator
-        require(operators[msg.sender].registrationTime == 0, "Operator with this address is already registered or was registered before");
+        require(operators[msg.sender].registrationTime == 0, "Calling operator is already registered or was registered before");
 
         // create a new operator
         operators[msg.sender] = Operator({
-            registrationTime: block.timestamp,
+            operatorTopic: _operatorTopic,      // initial operatorTopic
+            balance: 0,                         // initial balance
+
+            registrationTime: block.timestamp,  // current block timestamp
+            acceptedRenderInvoices: 0,          // initial acceptedRenderInvoices
+            declinedRenderInvoices: 0,          // initial declinedRenderInvoices
+            isArchived: false                   // initial isArchived
         });
 
         // emit an event about the registration
-        emit RegisteredUser(msg.sender, operators[msg.sender].registrationTime);
+        emit RegisteredUser(msg.sender, msg.sender, operators[msg.sender].registrationTime);
 
     }
 
@@ -109,9 +118,9 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         whenNotPaused 
     {
 
-        // check if the calling account is registered as operator
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
-        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
+        // check if the calling account is registered as operator and not archived
+        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
+        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
 
         // get the operator data
         Operator storage operatorData = operators[msg.sender];
@@ -136,7 +145,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         operatorData.isArchived = true;
 
         // emit an event about the deletion
-        emit UnregisteredUser(msg.sender, block.timestamp);
+        emit UnregisteredUser(msg.sender, msg.sender, block.timestamp);
 
     }
 
@@ -148,11 +157,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         returns(bool)
     {
 
-        // check if the given account is registered as operator
-        require(operators[_operatorAccount].registrationTime != 0, "Operator with this address is not registered");
-
-        // if required statement passed successfully, return true
-        return true;
+        // check if the given operator is registered as operator and NOT archived
+        return (operators[_operatorAccount].registrationTime != 0 && operators[_operatorAccount].isArchived == false);
 
     }
 
@@ -165,8 +171,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     {
 
         // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
-        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
+        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
+        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
 
         // make sure a deposit was provided
         require(msg.value > 0, "The amount of HBAR deposited must not be zero");
@@ -176,7 +182,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         
     }
 
-    // function to withdraw specified amount of HBAR from the operator's balance
+    // function to withdraw specified amount of TINYBAR from the operator's balance
     function withdrawOperatorFunds(uint256 _amount) 
         public 
         nonReentrant 
@@ -184,15 +190,16 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     {
         
         // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
-        require(operators[msg.sender].isArchived == false, "Operator with this address was archived and no more changes are allowed");
+        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
+        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
 
         // check if the operator balance is sufficient
-        require(operatorData.balance >= _amount, "Insufficient balance");
+        require(_amount > 0, "Amount must be greater than zero");
+        require(operators[msg.sender].balance >= _amount, "Insufficient balance");
 
         // get the operator data
         Operator storage operatorData = operators[msg.sender];
-
+    
         // sum up all deposits of pending render jobs of this operator
         uint256 renderJobCosts = getReservedOperatorFunds(msg.sender);
 
@@ -214,8 +221,13 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         returns(uint256) 
     {
 
-        // check if the requested account is registered as operator
-        require(operators[_operatorAccount].registrationTime != 0, "Operator with this address is not registered");
+        // check if the calling account is registered as operator and not archived
+        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
+        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+
+        // check if the queried account is registered as operator and not archived
+        require(operators[_operatorAccount].registrationTime != 0, "Queried operator with this address is not registered");
+        require(operators[_operatorAccount].isArchived == false, "Queried operator with this address was archived and no more changes are allowed");
 
         // return the balance
         return operators[_operatorAccount].balance;
@@ -229,17 +241,21 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         returns(uint256) 
     {
 
-        // check if the requested account is registered as operator
-        require(operators[_operatorAccount].registrationTime != 0, "Operator with this address is not registered");
+        // check if the calling account is registered as operator and not archived
+        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
+        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
 
-        // get the operator data
-        Operator storage operatorData = operators[_operatorAccount];
+        // check if the queried account is registered as operator and not archived
+        require(operators[_operatorAccount].registrationTime != 0, "Queried operator with this address is not registered");
+        require(operators[_operatorAccount].isArchived == false, "Queried operator with this address was archived and no more changes are allowed");
 
         // sum up all deposits of pending render jobs of this operator
         uint256 renderJobCosts = 0;
         for (uint256 i = 0; i < operatorRenderJobs[_operatorAccount].length; i++) {
-            if (RenderJobs[operatorRenderJobs[_operatorAccount][i]].isArchived == false) {
-                renderJobCosts = renderJobCosts + RenderJobs[operatorRenderJobs[_operatorAccount][i]].jobCost;
+            if (RenderJobs[operatorRenderJobs[_operatorAccount][i]].owner == _operatorAccount) {
+                if (RenderJobs[operatorRenderJobs[_operatorAccount][i]].isArchived == false) {
+                    renderJobCosts = renderJobCosts + RenderJobs[operatorRenderJobs[_operatorAccount][i]].jobCost;
+                }
             }
         }
 
@@ -259,6 +275,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
         // node information
         address operatorAccount;
+        string nodeTopic;                  // the address of the operator topic on Hedera
         uint256 nodeGuarantee;
         uint256 registrationTime;
 
@@ -279,12 +296,11 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     mapping(address => address[]) private operatorNodes;
 
     // function to add a new node to an operator account
-    function addNode(address _nodeAccount) 
+    function addNode(address _nodeAccount, string memory _nodeTopic) 
         public 
         payable 
         nonReentrant 
-        whenNotPaused 
-	    returns(uint256)
+        whenNotPaused
     {
 
         // check if the calling account is registered as operator
@@ -293,6 +309,8 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         // check if the given node account is NOT already registered as node
         require(Nodes[_nodeAccount].registrationTime == 0, "Node with this address is already registered");
 
+        // TODO: Do we need to check if another node with the same nodeTopic is already registered?
+
         // convert the node guarantee into HBAR with the help of the exchange rate precompile
         uint256 tinycents = REQUIRED_SAFETY_DEPOSITY_USD_CENTS * TINY_PARTS_PER_WHOLE;
         uint256 requiredTinybars = tinycentsToTinybars(tinycents);
@@ -300,11 +318,21 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         // check if the required node guarantee was provided
         require(msg.value >= requiredTinybars, "Insufficient node guarantee provided");
 
+        // refund the excess amount provided if any
+        uint256 excess = msg.value - requiredTinybars;
+        if (excess > 0) {
+            // refund the excess amount provided for the node guarantee
+            payable(msg.sender).transfer(excess);
+        }
+
         // add the new node to the Nodes mapping
         Nodes[_nodeAccount] = Node({
             operatorAccount: msg.sender,
-            nodeGuarantee: msg.value,
+            nodeTopic: _nodeTopic,
+            nodeGuarantee: requiredTinybars,
             registrationTime: block.timestamp,
+            acceptedRenderInvoices: 0,
+            declinedRenderInvoices: 0,
             isActive: true,
             isArchived: false
         });
@@ -313,10 +341,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         operatorNodes[msg.sender].push(_nodeAccount);
 
         // emit an event about the added node
-        emit AddedNode(msg.sender, _nodeAccount, block.timestamp);
-
-        // return the node ID
-        return operatorNodes[msg.sender].length - 1;
+        emit AddedNode(msg.sender, _nodeAccount, msg.sender, _nodeAccount, _nodeTopic, block.timestamp);
 
     }
 
@@ -354,7 +379,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         thisOperatorNodes.pop();
 
         // emit an event about the deleted node
-        emit RemovedNode(msg.sender, _nodeAccount, block.timestamp);
+        emit RemovedNode(msg.sender, _nodeAccount, msg.sender, _nodeAccount, Nodes[_nodeAccount].nodeTopic, block.timestamp);
 
     }
 
@@ -413,8 +438,15 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         // check if the required node guarantee was provided
         require((nodeData.nodeGuarantee + msg.value) >= requiredTinybars, "Insufficient node guarantee provided");
 
-        // update the node guarantee with the transferred value and set node as active
-        nodeData.nodeGuarantee = nodeData.nodeGuarantee + msg.value;
+        // refund the excess amount provided if any
+        uint256 excess = (nodeData.nodeGuarantee + msg.value) - requiredTinybars;
+        if (excess > 0) {
+            // refund the excess amount provided for the node guarantee
+            payable(msg.sender).transfer(excess);
+        }
+
+        // update the node guarantee value and make it active
+        nodeData.nodeGuarantee = requiredTinybars;
         nodeData.isActive = true;
     
     }
@@ -526,6 +558,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         // add the new job to the RenderJobs mapping
         RenderJobs[_jobCID] = RenderJob({
             jobCID: _jobCID,
+            owner: msg.sender,
             jobTopic: _jobTopic,
             jobWork: _estimatedJobWork,
             jobCost: _estimatedJobCost,
@@ -571,7 +604,10 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
             nodeAccount: msg.sender,
             jobWork: _invoicedWork,
             jobCost: _invoicedCost,
-            state: InvoiceState.REQUESTED
+            state: InvoiceState.REQUESTED,
+            declineReason: InvoiceDeclineReason.INVALID_STATE,
+            prevInvoiceCID: "",
+            nextInvoiceCID: ""
         });
 
         // add the invoice CID to the renderJobInvoices mapping
@@ -611,6 +647,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
     }
 
+    // TODO: Make sure that payment is only executed once per invoice and that the recipient of the payment is not the owner of the render job
     // function to accept and pay a render invoice filed for a specific render job
     // NOTE: this function may only be successfully called by the operator who owns the render job
     function acceptRenderInvoices(string memory _jobCID, string[] memory _invoiceCIDs) 
@@ -626,7 +663,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
         // get job owner and job data
         Operator storage jobOwner = operators[msg.sender];
-        RenderJob storage jobData = RenderJobs[_jobCID];
+        // RenderJob storage jobData = RenderJobs[_jobCID];
 
         // initialize error values to return
         InvoiceErrors[] memory errors = new InvoiceErrors[](_invoiceCIDs.length);
@@ -689,7 +726,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
         // get job owner and job data
         Operator storage jobOwner = operators[msg.sender];
-        RenderJob storage jobData = RenderJobs[_jobCID];
+        // RenderJob storage jobData = RenderJobs[_jobCID];
 
         // initialize error values to return
         InvoiceErrors[] memory errors = new InvoiceErrors[](_invoiceCIDs.length);
@@ -702,7 +739,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
             RenderInvoice storage invoiceData = RenderInvoices[_invoiceCID];
 
             // check if the job was rerendered
-            bool memory isRerendered = _isRerenderedJob(_invoiceCID);
+            bool isRerendered = _isRerenderedJob(_invoiceCID);
 
             // skip this invoice, if the given render invoice CID does not exist or does not belong to the given render job
             if (!isRenderJobInvoice(_jobCID, _invoiceCID)) {
@@ -718,7 +755,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
             // access invoicing node and its operator
             Node storage invoiceNode = Nodes[invoiceData.nodeAccount];
-            Operator storage invoiceOperator = operators[invoiceNode.operatorAccount];
+            // Operator storage invoiceOperator = operators[invoiceNode.operatorAccount];
 
             // TODO: That is probably not the best way to handle this case. Re-evaluate later!
             // check if the rendered invoice shall be declined because of an invalid render result
@@ -728,7 +765,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
                 if (isRerendered) {
 
                     // get the CID of the previously declined invoice
-                    _prevInvoiceCID = _getRerenderedInvoice(_invoiceCID);
+                    string memory _prevInvoiceCID = _getRerenderedInvoice(_invoiceCID);
 
                     // pay the previously declined invoice AND the current invoice
                     _executePayment(_prevInvoiceCID, InvoiceState.ACCEPTED_AFTER_RERENDER);
@@ -846,7 +883,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         while (RenderInvoices[prevInvoiceCID].state != InvoiceState.INVALID_STATE) {
 
             // if this invoice was re-rendered, return true
-            if (RenderInvoices[prevInvoiceCID].state == InvoiceState.ACCEPTED_AFTE_RERENDER || RenderInvoices[prevInvoiceCID].declineReason == InvoiceDeclineReason.INVALID_RENDER_RESULT) {
+            if (RenderInvoices[prevInvoiceCID].state == InvoiceState.ACCEPTED_AFTER_RERENDER || RenderInvoices[prevInvoiceCID].declineReason == InvoiceDeclineReason.INVALID_RENDER_RESULT) {
                 return true;
             }
 
@@ -867,7 +904,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         private 
         view 
 
-        returns(string)
+        returns(string memory)
     {
 
         // while a previouse invoice is linked, check if it was declined because of an invalid render result
@@ -877,7 +914,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
         while (RenderInvoices[prevInvoiceCID].state != InvoiceState.INVALID_STATE) {
 
             // if this invoice was re-rendered, return true
-            if (RenderInvoices[prevInvoiceCID].state == InvoiceState.ACCEPTED_AFTE_RERENDER || RenderInvoices[prevInvoiceCID].declineReason == InvoiceDeclineReason.INVALID_RENDER_RESULT) {
+            if (RenderInvoices[prevInvoiceCID].state == InvoiceState.ACCEPTED_AFTER_RERENDER || RenderInvoices[prevInvoiceCID].declineReason == InvoiceDeclineReason.INVALID_RENDER_RESULT) {
                 return prevInvoiceCID;
             }
 
@@ -893,7 +930,7 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
 
     // (private) helper function to execute the payment of a render invoice
     // NOTE: This is a private function, because it should only be called by the acceptRenderInvoices function. All sanity checks MUST be done before calling this function!
-    function _executePayment(string memory _invoiceCID, InvoiceState memory _invoiceState) 
+    function _executePayment(string memory _invoiceCID, InvoiceState _invoiceState) 
         private 
     {
 
@@ -920,23 +957,23 @@ contract RenderhiveContract is ReentrancyGuard, Ownable, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     //  CONTRACT MANAGEMENT
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // TODO: Such an option adds a level of security, but also one of centralized control over the contract. 
-    //       Should we give up this option in favor of absolute decentralization?
-    //       - if yes, then remove the owner variable and all functions that use it
+    // // TODO: The "pause" option adds a level of security, but also one of centralized control over the contract. 
+    // //       Should we give up this option in favor of absolute decentralization?
+    // //       - if yes, then remove the owner variable and all functions that use it
 
-    // functions to enable the pausing and unpausing of the smart contract (in case of a contract redeployment, a bug, or an exploit)
-    function pause() 
-        public 
-        onlyOwner 
-    {
-        _pause();
-    }
-    function unpause() 
-        public 
-        onlyOwner 
-    {
-        _unpause();
-    }
+    // // functions to enable the pausing and unpausing of the smart contract (in case of a contract redeployment, a bug, or an exploit)
+    // function pause() 
+    //     public 
+    //     onlyOwner 
+    // {
+    //     _pause();
+    // }
+    // function unpause() 
+    //     public 
+    //     onlyOwner 
+    // {
+    //     _unpause();
+    // }
     
     // function to check the contracts HBAR balance
     function getBalance() 
