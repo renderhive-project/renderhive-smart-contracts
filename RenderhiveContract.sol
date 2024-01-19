@@ -51,6 +51,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     //  EVENTS
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    // TODO: Implement events for all important the functions (e.g, deposit, withdraw, etc.)
+
     // operator events
     event RegisteredUser(address indexed operatorTopic, address operatorAccount, uint256 registrationTime);
     event UnregisteredUser(address indexed operatorTopic, address operatorAccount, uint256 deletionTime);
@@ -118,9 +120,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         whenNotPaused 
     {
 
-        // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
-        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+        // check if the calling address is registered as operator OR node
+        require((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) , "Function call is only allowed for registered operators");
 
         // get the operator data
         Operator storage operatorData = operators[msg.sender];
@@ -157,6 +158,9 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         returns(bool)
     {
 
+        // check if the calling address is registered as operator OR node
+        require((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) , "Function call is only allowed for registered operators");
+
         // check if the given operator is registered as operator and NOT archived
         return (operators[_operatorAccount].registrationTime != 0 && operators[_operatorAccount].isArchived == false);
 
@@ -170,9 +174,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         whenNotPaused 
     {
 
-        // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
-        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+        // check if the calling address is registered as operator OR node
+        require((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) , "Function call is only allowed for registered operators");
 
         // make sure a deposit was provided
         require(msg.value > 0, "The amount of HBAR deposited must not be zero");
@@ -189,9 +192,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         whenNotPaused 
     {
         
-        // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
-        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+        // check if the calling address is registered as operator OR node
+        require((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) , "Function call is only allowed for registered operators");
 
         // check if the operator balance is sufficient
         require(_amount > 0, "Amount must be greater than zero");
@@ -221,13 +223,12 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         returns(uint256) 
     {
 
-        // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
-        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+        // check if the calling address is registered as operator OR node
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
 
         // check if the queried account is registered as operator and not archived
-        require(operators[_operatorAccount].registrationTime != 0, "Queried operator with this address is not registered");
-        require(operators[_operatorAccount].isArchived == false, "Queried operator with this address was archived and no more changes are allowed");
+        require(operators[_operatorAccount].registrationTime != 0, "Address is not known");
+        require(operators[_operatorAccount].isArchived == false, "Address was archived and no more changes or queries are allowed");
 
         // return the balance
         return operators[_operatorAccount].balance;
@@ -241,13 +242,12 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         returns(uint256) 
     {
 
-        // check if the calling account is registered as operator and not archived
-        require(operators[msg.sender].registrationTime != 0, "Calling operator is not registered");
-        require(operators[msg.sender].isArchived == false, "Calling operator was archived and no more interactions are allowed");
+        // check if the calling address is registered as operator OR node
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
 
         // check if the queried account is registered as operator and not archived
-        require(operators[_operatorAccount].registrationTime != 0, "Queried operator with this address is not registered");
-        require(operators[_operatorAccount].isArchived == false, "Queried operator with this address was archived and no more changes are allowed");
+        require(operators[_operatorAccount].registrationTime != 0, "Address is not known");
+        require(operators[_operatorAccount].isArchived == false, "Address was archived and no more changes or queries are allowed");
 
         // sum up all deposits of pending render jobs of this operator
         uint256 renderJobCosts = 0;
@@ -267,7 +267,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     //  NODE MANAGEMENT
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    // TODO: Think about shifting the nodeGuarentee field to the Operator struct
+    // TODO: Think about shifting the nodeStake field to the Operator struct
     //         - might be easier to manage, in case jobs need to be paid
 
     // these functions enable the registration and management of nodes owned by operators on the Renderhive network
@@ -276,7 +276,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // node information
         address operatorAccount;
         string nodeTopic;                  // the address of the operator topic on Hedera
-        uint256 nodeGuarantee;
+        uint256 nodeStake;
         uint256 registrationTime;
 
         // node statistics
@@ -284,7 +284,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         uint256 declinedRenderInvoices;    // number of render jobs NOT successfully processed by this node
 
         // node status flags
-        bool isActive;                     // flag to indicate if the node is active (i.e., has the required node guarantee)
+        bool isActive;                     // flag to indicate if the node is active (i.e., has the required node stake)
         bool isArchived;                   // flag to indicate if the node was removed (i.e., the node was deactivated and no more changes are allowed)
 
     }
@@ -304,24 +304,27 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     {
 
         // check if the calling account is registered as operator
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
+
+        // check that the address does not belong to an already registered operator
+        require((operators[_nodeAccount].registrationTime == 0), "An operator can not be registered as node");
 
         // check if the given node account is NOT already registered as node
         require(Nodes[_nodeAccount].registrationTime == 0, "Node with this address is already registered");
 
         // TODO: Do we need to check if another node with the same nodeTopic is already registered?
 
-        // convert the node guarantee into HBAR with the help of the exchange rate precompile
+        // convert the node stake into HBAR with the help of the exchange rate precompile
         uint256 tinycents = REQUIRED_SAFETY_DEPOSITY_USD_CENTS * TINY_PARTS_PER_WHOLE;
         uint256 requiredTinybars = tinycentsToTinybars(tinycents);
 
-        // check if the required node guarantee was provided
-        require(msg.value >= requiredTinybars, "Insufficient node guarantee provided");
+        // check if the required node stake was provided
+        require(msg.value >= requiredTinybars, "Insufficient node stake provided");
 
         // refund the excess amount provided if any
         uint256 excess = msg.value - requiredTinybars;
         if (excess > 0) {
-            // refund the excess amount provided for the node guarantee
+            // refund the excess amount provided for the node stake
             payable(msg.sender).transfer(excess);
         }
 
@@ -329,7 +332,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         Nodes[_nodeAccount] = Node({
             operatorAccount: msg.sender,
             nodeTopic: _nodeTopic,
-            nodeGuarantee: requiredTinybars,
+            nodeStake: requiredTinybars,
             registrationTime: block.timestamp,
             acceptedRenderInvoices: 0,
             declinedRenderInvoices: 0,
@@ -351,8 +354,9 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         nonReentrant 
         whenNotPaused 
     {
+
         // check if the account is registered
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
         require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as the operator's node");
@@ -364,11 +368,13 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         uint256 index = 0;
         while (thisOperatorNodes[index] != _nodeAccount) {
             index++;
+            require(index < thisOperatorNodes.length, "Node not found in operator's node list");
         }
 
-        // move the node guarantee to the operator balance
-        operators[msg.sender].balance = operators[msg.sender].balance + Nodes[_nodeAccount].nodeGuarantee;
-        Nodes[_nodeAccount].nodeGuarantee = 0;
+        // if there is a node stake, transfer it to the operator account
+        if (Nodes[_nodeAccount].nodeStake > 0) {
+            payable(Nodes[_nodeAccount].operatorAccount).transfer(Nodes[_nodeAccount].nodeStake);
+        }
 
         // mark the node as archived
         Nodes[_nodeAccount].isActive = false;
@@ -391,23 +397,31 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         returns(bool)
     {
 
+        // check if the calling address is registered as operator OR node
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
+
         // check if the given account is registered as operator
-        require(operators[_operatorAccount].registrationTime != 0, "Operator with this address is not registered");
+        bool isRegisteredOperator = (operators[_operatorAccount].registrationTime != 0);
 
         // check if the given node account is registered
-        require(Nodes[_nodeAccount].registrationTime != 0, "Node with this address is not registered");
+        bool isRegisteredNode = (Nodes[_nodeAccount].registrationTime != 0);
 
         // check if the node data states the correct operator account
-        require(Nodes[_nodeAccount].operatorAccount == _operatorAccount, "Node with this address is not registered as the operator's node");
+        bool isInOperatorNodes = (Nodes[_nodeAccount].operatorAccount == _operatorAccount);
 
-        // get array of operator nodes 
-        address[] storage thisOperatorNodes = operatorNodes[_operatorAccount];
+        // have the above checks passed successfully?
+        if (isRegisteredOperator && isRegisteredNode && isInOperatorNodes) {
 
-        // check if the node is in the array of the operator's nodes
-        for (uint256 i = 0; i < thisOperatorNodes.length; i++) {
-            if (thisOperatorNodes[i] == _nodeAccount) {
-                return true;
+            // get array of operator nodes 
+            address[] storage thisOperatorNodes = operatorNodes[_operatorAccount];
+
+            // check if the node is in the array of the operator's nodes
+            for (uint256 i = 0; i < thisOperatorNodes.length; i++) {
+                if (thisOperatorNodes[i] == _nodeAccount) {
+                    return true;
+                }
             }
+
         }
 
         // otherwise the node is not owned by the operator
@@ -415,68 +429,68 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
     }
 
-    // function to deposit the node guarantee for a node from the operator account
-    function depositNodeGuarantee(address _nodeAccount) 
+    // function to deposit the node stake for a node from the operator account
+    function depositNodeStake(address _nodeAccount) 
         public 
         payable 
         nonReentrant 
         whenNotPaused 
     {
         // check if the calling account is registered as operator
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
-        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as the operator's node");
+        require(isNode(msg.sender, _nodeAccount), "Function call is only allowed for the owner of the node");
 
         // get the node data
         Node storage nodeData = Nodes[_nodeAccount];
 
-        // convert the required node guarantee value into HBAR with the help of the exchange rate precompile
+        // convert the required node stake value into HBAR with the help of the exchange rate precompile
         uint256 tinycents = REQUIRED_SAFETY_DEPOSITY_USD_CENTS * TINY_PARTS_PER_WHOLE;
         uint256 requiredTinybars = tinycentsToTinybars(tinycents);
 
-        // check if the required node guarantee was provided
-        require((nodeData.nodeGuarantee + msg.value) >= requiredTinybars, "Insufficient node guarantee provided");
+        // check if the required node stake was provided
+        require((nodeData.nodeStake + msg.value) >= requiredTinybars, "Insufficient node stake provided");
 
         // refund the excess amount provided if any
-        uint256 excess = (nodeData.nodeGuarantee + msg.value) - requiredTinybars;
+        uint256 excess = (nodeData.nodeStake + msg.value) - requiredTinybars;
         if (excess > 0) {
-            // refund the excess amount provided for the node guarantee
+            // refund the excess amount provided for the node stake
             payable(msg.sender).transfer(excess);
         }
 
-        // update the node guarantee value and make it active
-        nodeData.nodeGuarantee = requiredTinybars;
+        // update the node stake value and make it active
+        nodeData.nodeStake = requiredTinybars;
         nodeData.isActive = true;
     
     }
 
-    // function to withdraw the node guarantee of a node to the operator account
-    function withdrawNodeGuarantee(address _nodeAccount) 
+    // function to withdraw the node stake of a node to the operator account
+    function withdrawNodeStake(address _nodeAccount) 
         public 
         nonReentrant 
         whenNotPaused 
     {
 
         // check if the calling account is registered as operator
-        require(operators[msg.sender].registrationTime != 0, "Operator with this address is not registered");
+        require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
-        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as the operator's node");
+        require(isNode(msg.sender, _nodeAccount), "Function call is only allowed for the owner of the node");
 
         // get the node data
         Node storage nodeData = Nodes[_nodeAccount];
-        uint256 nodeGuarantee = nodeData.nodeGuarantee;
+        uint256 nodeStake = nodeData.nodeStake;
 
-        // check if the node guarantee is greater than zero
-        require(nodeGuarantee > 0, "No node guarantee to withdraw");
+        // check if the node stake is greater than zero
+        require(nodeStake > 0, "No node stake to withdraw");
 
-        // update the nodes node guarantee value and make it inactive
-        nodeData.nodeGuarantee = 0;
+        // update the nodes node stake value and make it inactive
+        nodeData.nodeStake = 0;
         nodeData.isActive = false;
 
-        // withdraw the node guarantee to the operator account and make the node inactive
-        payable(msg.sender).transfer(nodeGuarantee);
+        // withdraw the node stake to the operator account and make the node inactive
+        payable(msg.sender).transfer(nodeStake);
     
     }
 
@@ -530,7 +544,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     //       A malicious user could lie about it and therefore we need to implement further checks and balances to make sure 
     //       the render nodes are not left with an unpaid render job. Following measure may be implemented in- and outside the smart contract:
     //
-    //         - the node guarentees of the operator can be used to cover unpaid render jobs
+    //         - the node stakes of the operator can be used to cover unpaid render jobs
     //         - the operator can be banned from the network, if it does not pay its render jobs
     //         - the render nodes will do their own cost estimates before starting a render job and only start rendering if it fits with the estimated costs 
     function addRenderJob(string memory _jobCID, address _jobTopic, uint256 _estimatedJobWork, uint256 _estimatedJobCost) 
