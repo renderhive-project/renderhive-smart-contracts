@@ -359,7 +359,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
-        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as the operator's node");
+        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as this operator's node");
 
         // Operator's node array
         address[] storage thisOperatorNodes = operatorNodes[msg.sender];
@@ -440,7 +440,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
-        require(isNode(msg.sender, _nodeAccount), "Function call is only allowed for the owner of the node");
+        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as this operator's node");
 
         // get the node data
         Node storage nodeData = Nodes[_nodeAccount];
@@ -448,6 +448,9 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // convert the required node stake value into HBAR with the help of the exchange rate precompile
         uint256 tinycents = REQUIRED_SAFETY_DEPOSITY_USD_CENTS * TINY_PARTS_PER_WHOLE;
         uint256 requiredTinybars = tinycentsToTinybars(tinycents);
+
+        // check if the node has insufficient stake
+        require(nodeData.nodeStake < requiredTinybars, "Node already has sufficient stake");
 
         // check if the required node stake was provided
         require((nodeData.nodeStake + msg.value) >= requiredTinybars, "Insufficient node stake provided");
@@ -476,7 +479,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         require(operators[msg.sender].registrationTime != 0, "Function call is only allowed for registered operators");
 
         // check if the given node account is registered as the calling account's node
-        require(isNode(msg.sender, _nodeAccount), "Function call is only allowed for the owner of the node");
+        require(isNode(msg.sender, _nodeAccount), "Node with this address is not registered as this operator's node");
 
         // get the node data
         Node storage nodeData = Nodes[_nodeAccount];
