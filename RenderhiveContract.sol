@@ -224,7 +224,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     {
 
         // check if the calling address is registered as operator OR node
-        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
 
         // check if the queried account is registered as operator and not archived
         require(operators[_operatorAccount].registrationTime != 0, "Address is not known");
@@ -243,7 +243,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     {
 
         // check if the calling address is registered as operator OR node
-        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
 
         // check if the queried account is registered as operator and not archived
         require(operators[_operatorAccount].registrationTime != 0, "Address is not known");
@@ -398,7 +398,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     {
 
         // check if the calling address is registered as operator OR node
-        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || Nodes[msg.sender].registrationTime != 0), "Function call is only allowed for registered operators or nodes");
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
 
         // check if the given account is registered as operator
         bool isRegisteredOperator = (operators[_operatorAccount].registrationTime != 0);
@@ -495,6 +495,22 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // withdraw the node stake to the operator account and make the node inactive
         payable(msg.sender).transfer(nodeStake);
     
+    }
+
+    // function to get the current stake of the node
+    function getNodeStake(address _nodeAccount) 
+        public 
+        view 
+
+        returns(uint256)
+    {
+
+        // check if the calling address is registered as operator OR node
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
+
+        // return the stake of the given node as result
+        return Nodes[_nodeAccount].nodeStake;
+
     }
 
 
