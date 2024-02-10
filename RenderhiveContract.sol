@@ -48,8 +48,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // TODO: Implement events for all important the functions (e.g, deposit, withdraw, etc.)
 
     // operator events
-    event RegisteredUser(address indexed operatorTopic, uint256 registrationTime);
-    event UnregisteredUser(address indexed operatorTopic, uint256 deletionTime);
+    event RegisteredUser(address indexed operatorAccount, uint256 registrationTime);
+    event UnregisteredUser(address indexed operatorAccount, uint256 deletionTime);
 
     // node events
     event AddedNode(address indexed operatorAccount, address indexed nodeAccount, string topicID, uint256 registrationTime);
@@ -98,7 +98,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // NOTE: Renderhive nodes may call this to synchronize their local time with the hive time.
     //       This enables the node to calculate the hive cycle on its own.
     function getCurrentHiveTime() 
-        public 
+        external 
         view
 
         returns(uint256)
@@ -108,6 +108,19 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         uint256 diff = block.timestamp - HIVE_START_TIME;
 
         return diff;
+
+    }
+    
+    // function to get the hive start time
+    function getHiveStartTime() 
+        external 
+        view
+
+        returns(uint256)
+    {
+        
+        // return the hive's start time
+        return HIVE_START_TIME;
 
     }
 
@@ -234,7 +247,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         require(msg.value > 0, "The amount of HBAR deposited must not be zero");
 
         // update the operator balance value
-        operators[msg.sender].balance = operators[msg.sender].balance + msg.value;
+        operators[msg.sender].balance += msg.value;
         
         // update the calling addresses last activity timestamp
         _updateLastActivity(msg.sender);
@@ -320,6 +333,29 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
     }
 
+    // function to get the last activity (only callable by the operator)
+    function getOperatorLastActivity(address _operatorAccount) 
+        public 
+        view 
+
+        returns(uint256) 
+    {
+
+        // check if the calling address is registered as active operator OR active node
+        require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
+
+        // check if the queried account is registered as operator and not archived
+        require(operators[_operatorAccount].registrationTime != 0, "Address is not known");
+        require(operators[_operatorAccount].isArchived == false, "Address was archived and no more changes or queries are allowed");
+
+        // return the balance
+        return operators[_operatorAccount].lastActivity;
+
+    }
+
+
+
+
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     //  NODE MANAGEMENT
     // ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -334,7 +370,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         uint256 lastActivity;        // the time when the node had its last (state changing) activity on the smart contract
 
         // node status flags
-        bool isActive;               // flag to indicate if the node is active (i.e., has the required node stake)
+        bool isStaked;               // flag to indicate if the node is staked (i.e., has deposited the required node stake)
         bool isArchived;             // flag to indicate if the node was removed (i.e., the node was deactivated and no more changes are allowed)
 
     }
@@ -385,7 +421,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
             nodeStake: requiredTinybars,
             registrationTime: block.timestamp,
             lastActivity: block.timestamp,
-            isActive: true,
+            isStaked: true,
             isArchived: false
         });
 
@@ -429,7 +465,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         }
 
         // mark the node as archived
-        Nodes[_nodeAccount].isActive = false;
+        Nodes[_nodeAccount].isStaked = false;
         Nodes[_nodeAccount].isArchived = true;
 
         // remove the node from the operatorNodes array
@@ -521,7 +557,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
         // update the node stake value and make it active
         nodeData.nodeStake = requiredTinybars;
-        nodeData.isActive = true;
+        nodeData.isStaked = true;
     
         // update the calling addresses last activity timestamp
         _updateLastActivity(msg.sender);
@@ -554,7 +590,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
         // update the nodes node stake value and make it inactive
         nodeData.nodeStake = 0;
-        nodeData.isActive = false;
+        nodeData.isStaked = false;
 
         // withdraw the node stake to the operator account and make the node inactive
         payable(msg.sender).transfer(nodeStake);
@@ -717,39 +753,21 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         whenNotPaused
     {
 
-        // check if the calling address is registered as a active node
+        // check if the calling address is registered as an active node
         require((Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false), "Function call is only allowed for registered nodes");
-
-        // check if a render job with the given CID exists
-        require(RenderJobs[_jobCID].owner != address(0), "Render job with this CID does not exist");
-
-        // check if the render job is NOT archived
-        require(RenderJobs[_jobCID].isArchived == false, "Render job is archived");
 
         // check if the node has sufficient node stake
         require(_isNodeStaked(msg.sender), "Insufficient node stake");
+
+        // check if a render job with the given CID exists and is NOT archived
+        require(RenderJobs[_jobCID].owner != address(0), "Render job with this CID does not exist");
+        require(RenderJobs[_jobCID].isArchived == false, "Render job is archived");
 
         // check if the node wants to claim the job for the correct hive cycle
         require(_hiveCycle == getCurrentHiveCycle(), "Not a valid hive cycle");
 
         // get the render job data
         RenderJob storage renderJob = RenderJobs[_jobCID];
-
-        // create a new render job claim
-        RenderJobClaim memory nodeClaim = RenderJobClaim({
-            node: msg.sender,
-            nodeCount: _nodeCount,
-            nodeShare: _nodeShare,
-            jobRoot: _jobRoot,
-            consensusRoot: _consensusRoot,
-            invoiceCID: "",
-            invoicedAmount: 0,
-            invoicedTime: 0,
-            invoiceRevoked: false
-        });
-
-        // add the claim to the render job
-        renderJob.claims[_hiveCycle].push(nodeClaim);
 
         // NOTE: We implement a skipping mechanism for render jobs with obvious merkle root collisions 
         //       (i.e., if two nodes claim the same render job with different merkle roots). 
@@ -775,6 +793,22 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
             }
 
         }
+
+        // create a new render job claim
+        RenderJobClaim memory nodeClaim = RenderJobClaim({
+            node: msg.sender,
+            nodeCount: _nodeCount,
+            nodeShare: _nodeShare,
+            jobRoot: _jobRoot,
+            consensusRoot: _consensusRoot,
+            invoiceCID: "",
+            invoicedAmount: 0,
+            invoicedTime: 0,
+            invoiceRevoked: false
+        });
+        
+        // add the claim to the render job
+        renderJob.claims[_hiveCycle].push(nodeClaim);
 
         // emit an event about the added claim
         // NOTE: This event is highly important. It enables all nodes to validate the claims of other nodes outside the smart contract and to detect malicious nodes.
@@ -877,7 +911,7 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
     // function to redeem a render job invoice
     // NOTE: This function expects the invoice to be signed by the job owner and the invoice issuer to be the on executing the transaction.
-    function claimRenderInvoice(string calldata _invoiceCID, string calldata _jobCID, uint256 _hiveCycle, uint256 _invoicedWork, uint256 _invoicedAmount, address _jobOwner, bytes memory _ownerSignature) 
+    function claimRenderInvoice(string calldata _invoiceCID, string calldata _jobCID, uint256 _hiveCycle, uint256 _invoicedWork, uint256 _invoicedAmount, address _jobOwner, bytes calldata _ownerSignature) 
         public
         nonReentrant
         whenNotPaused
@@ -1053,8 +1087,6 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // NOTE: This is a private function, because it should only be called internally by other functions within this contract.
     function _transferOperatorFunds(address _receivingAccount, uint256 _amount) 
         private 
-        nonReentrant 
-        whenNotPaused 
     {
 
         // check if the calling address is registered as active operator
@@ -1085,8 +1117,6 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // (private) helper function to update a addresses last activity timestamp
     function _updateLastActivity(address _account) 
         private 
-        nonReentrant 
-        whenNotPaused 
     {
 
         // update the last activity timestamp
@@ -1102,8 +1132,6 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
     // NOTE: This function should only be called from other functions in this contract. All necessary checks must be done before calling this function.
     function _isNodeStaked(address _nodeAccount) 
         private
-        nonReentrant
-        whenNotPaused 
 
         returns(bool)
     {
@@ -1112,8 +1140,11 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         uint256 tinycents = REQUIRED_SAFETY_DEPOSITY_USD_CENTS * TINY_PARTS_PER_WHOLE;
         uint256 requiredTinybars = tinycentsToTinybars(tinycents);
 
+        // update the status variable
+        Nodes[_nodeAccount].isStaked = bool(Nodes[_nodeAccount].nodeStake >= requiredTinybars);
+
         // check if the node has insufficient stake
-        return (Nodes[_nodeAccount].nodeStake >= requiredTinybars);
+        return Nodes[_nodeAccount].isStaked;
     
     }
 
