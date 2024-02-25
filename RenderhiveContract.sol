@@ -611,6 +611,9 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // check if the calling address is registered as active operator OR active node
         require(((operators[msg.sender].registrationTime != 0 && operators[msg.sender].isArchived == false) || (Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false)), "Function call is only allowed for registered operators or nodes");
 
+        // check if the given account is registered as node and not archived
+        require(Nodes[_nodeAccount].registrationTime != 0, "Node with this address is not registered");
+
         // return the stake of the given node as result
         return Nodes[_nodeAccount].nodeStake;
 
@@ -926,8 +929,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // check if the given render job exists and is owned by the given job owner (also checks if this account is registered as operator)
         require(isRenderJobOwner(_jobOwner, _jobCID) == true, "Render job does not exist or does not belong to this operator");
 
-        // check if the caller and the job owner are NOT the same address
-        require(msg.sender != _jobOwner, "Cannot claim invoices for own render jobs");
+        // check if the calling node does not belong to the job owner
+        require((msg.sender != _jobOwner && Nodes[msg.sender].operatorAccount != _jobOwner), "Cannot claim an invoice for own render jobs");
 
         // try to find a claim for the given render job and hive cycle 
         uint256 claimIndex = _getJobClaimIndex(_jobCID, _hiveCycle, msg.sender);
@@ -966,9 +969,8 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
 
     }
 
-    // function to force transfer from the job balance to the invoicing node owner's balance after 24 hours
-    // TODO: rename!
-    function forceTransferRenderJobBalance(string calldata _jobCID, uint256 _hiveCycle) 
+    // function to force transfer from the job balance to the invoicing node owner's balance after 72 hours
+    function enforceInvoicePayment(string calldata _jobCID, uint256 _hiveCycle, string calldata _invoiceCID)
         external
         nonReentrant
         whenNotPaused
@@ -980,12 +982,6 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         // check if the calling address is registered as active node
         require((Nodes[msg.sender].registrationTime != 0 && Nodes[msg.sender].isArchived == false) , "Function call is only allowed for registered nodes");
 
-        // check if the given render job exists and is owned by the given job owner (also checks if this account is registered as operator)
-        require(isRenderJobOwner(RenderJobs[_jobCID].owner, _jobCID) == true, "Render job does not exist or does not belong to this operator");
-
-        // check if the caller and the job owner are NOT the same address
-        require(msg.sender != RenderJobs[_jobCID].owner, "Cannot claim invoices for own render jobs");
-
         // try to find a claim for the given render job and hive cycle 
         uint256 claimIndex = _getJobClaimIndex(_jobCID, _hiveCycle, msg.sender);
 
@@ -993,12 +989,15 @@ contract RenderhiveContract is ReentrancyGuard, Pausable, SelfFunding {
         Operator storage operator = operators[Nodes[msg.sender].operatorAccount];
         RenderJobClaim storage claim = RenderJobs[_jobCID].claims[_hiveCycle][claimIndex];
 
-        // check if the invoice was already paid and the 72 hours have passed
+        // check if the given invoice CID is the same as the one in the claim
+        require(keccak256(abi.encodePacked(claim.invoiceCID)) == keccak256(abi.encodePacked(_invoiceCID)), "Invalid invoice CID");
+
+        // check if the invoice was already claimed, is still unpaid, and the 72 hours waiting time have passed
         require(claim.invoicedTime != 0, "Invoice was not paid yet");
-        require((claim.invoicedTime + 24 hours) < block.timestamp, "The paymet is locked for 24 hours");
+        require((claim.invoicedTime + 72 hours) < block.timestamp, "The paymet is locked for 72 hours");
         require(claim.invoicedAmount > 0, "Balance was already transferred");
 
-        // transfer the invoice amount from the invoicedAmount to the node owner's balance
+        // transfer the invoice amount from the invoicedAmount to the node owner's balance from the claim balance
         operator.balance += claim.invoicedAmount;
         claim.invoicedAmount = 0;
     
